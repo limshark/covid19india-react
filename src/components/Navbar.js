@@ -7,33 +7,33 @@ import {
 import locales from '../i18n/locales.json';
 
 import {useState, useCallback, useRef} from 'react';
-import * as Icon from 'react-feather';
+import {Book, HelpCircle, Home, Moon, Sun, Users} from 'react-feather';
 import {useTranslation} from 'react-i18next';
 import {Link} from 'react-router-dom';
-import {useSpring, useTransition, animated} from 'react-spring';
-import {useLockBodyScroll, useWindowSize} from 'react-use';
+import {useTransition, animated} from 'react-spring';
+import {useLockBodyScroll, usePageLeave, useWindowSize} from 'react-use';
+import useDarkMode from 'use-dark-mode';
 
-function Navbar({
-  pages,
-  darkMode,
-  showLanguageSwitcher,
-  setShowLanguageSwitcher,
-}) {
+function Navbar({pages, showLanguageSwitcher, setShowLanguageSwitcher}) {
   const {i18n, t} = useTranslation();
   const currentLanguage = Object.keys(locales).includes(i18n?.language)
     ? i18n?.language
     : i18n?.options?.fallbackLng[0];
 
   const [expand, setExpand] = useState(false);
+  const darkMode = useDarkMode(false);
 
   useLockBodyScroll(expand);
   const windowSize = useWindowSize();
 
-  const [spring, set, stop] = useSpring(() => ({opacity: 0}));
-  set({opacity: 1});
-  stop();
+  usePageLeave(() => setExpand(false));
 
-  const transitions = useTransition(expand, null, {
+  const navbarTransition = useTransition(true, {
+    from: {opacity: 0},
+    enter: {opacity: 1},
+  });
+
+  const expandTransition = useTransition(expand, {
     from: windowSize.width < 769 ? SLIDE_IN_MOBILE : SLIDE_IN,
     enter: windowSize.width < 769 ? SLIDE_OUT_MOBILE : SLIDE_OUT,
     leave: windowSize.width < 769 ? SLIDE_IN_MOBILE : SLIDE_IN,
@@ -41,19 +41,19 @@ function Navbar({
   });
 
   const handleMouseEnter = useCallback(() => {
-    if (windowSize.width > 769) {
+    if (windowSize.width >= 769) {
       setExpand(true);
     }
   }, [windowSize.width]);
 
-  const handleLangaugeSwitcher = useCallback(() => {
+  const handleLanguageSwitcher = useCallback(() => {
     if (expand) setExpand(false);
     setShowLanguageSwitcher(!showLanguageSwitcher);
   }, [expand, showLanguageSwitcher, setExpand, setShowLanguageSwitcher]);
 
-  return (
-    <animated.div className="Navbar" style={spring}>
-      <div className="navbar-left" onClick={handleLangaugeSwitcher.bind(this)}>
+  return navbarTransition((style, item) => (
+    <animated.div className="Navbar" {...{style}}>
+      <div className="navbar-left" onClick={handleLanguageSwitcher}>
         {locales[currentLanguage]}
       </div>
 
@@ -74,21 +74,26 @@ function Navbar({
           <span>{expand ? t('Close') : t('Menu')}</span>
         )}
 
-        {windowSize.width > 769 && (
+        {windowSize.width >= 769 && (
           <>
             <Link to="/">
               <span>
-                <Icon.Home {...activeNavIcon('/')} />
+                <Home {...activeNavIcon('/')} />
               </span>
             </Link>
             <Link to="/blog">
               <span>
-                <Icon.Book {...activeNavIcon('/blog')} />
+                <Book {...activeNavIcon('/blog')} />
+              </span>
+            </Link>
+            <Link to="/volunteers">
+              <span>
+                <Users {...activeNavIcon('/volunteers')} />
               </span>
             </Link>
             <Link to="/about">
               <span>
-                <Icon.HelpCircle {...activeNavIcon('/about')} />
+                <HelpCircle {...activeNavIcon('/about')} />
               </span>
             </Link>
             <span>
@@ -98,17 +103,16 @@ function Navbar({
         )}
       </div>
 
-      {transitions.map(({item, key, props}) =>
-        item ? (
-          <animated.div key={key} style={props}>
-            <Expand {...{pages, setExpand, darkMode, windowSize}} />
-          </animated.div>
-        ) : (
-          <animated.div key={key} style={props}></animated.div>
-        )
+      {expandTransition(
+        (style, item) =>
+          item && (
+            <animated.div {...{style}}>
+              <Expand {...{pages, setExpand, darkMode, windowSize}} />
+            </animated.div>
+          )
       )}
     </animated.div>
-  );
+  ));
 }
 
 function Expand({pages, setExpand, darkMode, windowSize}) {
@@ -116,7 +120,7 @@ function Expand({pages, setExpand, darkMode, windowSize}) {
   const {t} = useTranslation();
 
   const handleMouseLeave = useCallback(() => {
-    windowSize.width > 768 && setExpand(false);
+    windowSize.width >= 769 && setExpand(false);
   }, [setExpand, windowSize.width]);
 
   return (
@@ -142,7 +146,7 @@ function Expand({pages, setExpand, darkMode, windowSize}) {
         return null;
       })}
 
-      {windowSize.width < 768 && <SunMoon {...{darkMode}} />}
+      {windowSize.width < 769 && <SunMoon {...{darkMode}} />}
 
       <div className="expand-bottom">
         <h5>{t('A crowdsourced initiative.')}</h5>
@@ -166,9 +170,7 @@ const activeNavIcon = (path) => ({
 const SunMoon = ({darkMode}) => {
   return (
     <div className="SunMoon" onClick={darkMode.toggle}>
-      <div>
-        {darkMode.value ? <Icon.Sun color={'#ffc107'} /> : <Icon.Moon />}
-      </div>
+      <div>{darkMode.value ? <Sun color={'#ffc107'} /> : <Moon />}</div>
     </div>
   );
 };

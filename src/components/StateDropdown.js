@@ -1,5 +1,6 @@
 import {MAP_META, STATE_NAMES} from '../constants';
 
+import classnames from 'classnames';
 import {useState, useCallback, useRef} from 'react';
 import {useTranslation} from 'react-i18next';
 import {useHistory} from 'react-router-dom';
@@ -16,7 +17,7 @@ const StateDropdown = ({stateCode, trail}) => {
     setShowDropdown(false);
   });
 
-  const transitions = useTransition(showDropdown, null, {
+  const transitions = useTransition(showDropdown, {
     from: {
       opacity: 0,
       transform: 'translate3d(0, 2px, 0)',
@@ -50,37 +51,38 @@ const StateDropdown = ({stateCode, trail}) => {
   return (
     <div className="StateDropdown" ref={dropdownRef}>
       <animated.h1
-        className="state-name fadeInUp"
+        className={classnames('state-name', 'fadeInUp', {
+          expanded: showDropdown,
+        })}
         style={trail}
         onClick={setShowDropdown.bind(this, !showDropdown)}
       >
         {t(STATE_NAMES[stateCode])}
       </animated.h1>
 
-      {transitions.map(({item, key, props}) =>
-        item ? (
-          <animated.div className="dropdown" style={props} key={key}>
-            {Object.keys(MAP_META)
-              .filter(
-                (stateCodeItr) =>
-                  stateCodeItr !== 'TT' && stateCodeItr !== stateCode
-              )
-              .sort((code1, code2) =>
-                STATE_NAMES[code1].localeCompare(STATE_NAMES[code2])
-              )
-              .map((stateCodeItr) => (
-                <h1
-                  key={stateCodeItr}
-                  className="item"
-                  onClick={handleClick.bind(this, stateCodeItr)}
-                >
-                  {t(STATE_NAMES[stateCodeItr])}
-                </h1>
-              ))}
-          </animated.div>
-        ) : (
-          <animated.div key={stateCode} style={props}></animated.div>
-        )
+      {transitions(
+        (style, item) =>
+          item && (
+            <animated.div className="dropdown" {...{style}}>
+              {Object.keys(MAP_META)
+                .filter(
+                  (stateCodeItr) =>
+                    stateCodeItr !== 'TT' && stateCodeItr !== stateCode
+                )
+                .sort((code1, code2) =>
+                  STATE_NAMES[code1].localeCompare(STATE_NAMES[code2])
+                )
+                .map((stateCodeItr) => (
+                  <h1
+                    key={stateCodeItr}
+                    className="item"
+                    onClick={handleClick.bind(this, stateCodeItr)}
+                  >
+                    {t(STATE_NAMES[stateCodeItr])}
+                  </h1>
+                ))}
+            </animated.div>
+          )
       )}
 
       {showDropdown && <div className="backdrop"></div>}

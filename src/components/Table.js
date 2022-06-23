@@ -1,6 +1,8 @@
 import HeaderCell from './HeaderCell';
 import TableLoader from './loaders/Table';
+import {Delta7Icon, DistrictIcon, PerLakhIcon} from './snippets/Icons';
 import TableDeltaHelper from './snippets/TableDeltaHelper';
+import Tooltip from './Tooltip';
 
 import {TABLE_FADE_IN, TABLE_FADE_OUT} from '../animations';
 import {
@@ -11,28 +13,36 @@ import {
   TABLE_STATISTICS_EXPANDED,
   UNASSIGNED_STATE_CODE,
 } from '../constants';
-import {getTableStatistic, parseIndiaDate} from '../utils/commonFunctions';
+import {getStatistic, retry} from '../utils/commonFunctions';
 
 import {
-  FilterIcon,
   FoldDownIcon,
   InfoIcon,
   OrganizationIcon,
+  PeopleIcon,
+  PulseIcon,
   QuestionIcon,
-} from '@primer/octicons-v2-react';
+  SortAscIcon,
+  SortDescIcon,
+} from '@primer/octicons-react';
 import classnames from 'classnames';
-import {max} from 'date-fns';
 import equal from 'fast-deep-equal';
 import produce from 'immer';
 import {memo, useCallback, useEffect, useMemo, useState, lazy} from 'react';
+import {
+  ChevronLeft,
+  ChevronsLeft,
+  ChevronRight,
+  ChevronsRight,
+} from 'react-feather';
 import {useTranslation} from 'react-i18next';
 import {Link} from 'react-router-dom';
 import {useTrail, useTransition, animated, config} from 'react-spring';
-import {useSessionStorage} from 'react-use';
+import {useKeyPressEvent, useMeasure, useSessionStorage} from 'react-use';
 // eslint-disable-next-line
 import worker from 'workerize-loader!../workers/getDistricts';
 
-const Row = lazy(() => import('./Row'));
+const Row = lazy(() => retry(() => import('./Row')));
 
 function Table({
   data: states,
@@ -41,6 +51,11 @@ function Table({
   setRegionHighlighted,
   expandTable,
   setExpandTable,
+  hideDistrictData,
+  hideDistrictTestData,
+  hideVaccinated,
+  lastDataDate,
+  noDistrictDataStates,
 }) {
   const {t} = useTranslation();
   const [sortData, setSortData] = useSessionStorage('sortData', {
@@ -48,12 +63,22 @@ function Table({
     isAscending: false,
     delta: false,
   });
+  const [page, setPage] = useState(0);
+  const [delta7Mode, setDelta7Mode] = useState(false);
+
+  const [tableContainerRef, {width: tableWidth}] = useMeasure();
 
   const handleSortClick = useCallback(
     (statistic) => {
       if (sortData.sortColumn !== statistic) {
         setSortData(
           produce(sortData, (draftSortData) => {
+            if (
+              sortData.sortColumn === 'regionName' ||
+              statistic === 'regionName'
+            ) {
+              draftSortData.isAscending = !sortData.isAscending;
+            }
             draftSortData.sortColumn = statistic;
           })
         );
@@ -68,47 +93,74 @@ function Table({
     [sortData, setSortData]
   );
 
-  const trail = useTrail(3, {
+  const trail = useTrail(5, {
     from: {transform: 'translate3d(0, 10px, 0)', opacity: 0},
     to: {transform: 'translate3d(0, 0px, 0)', opacity: 1},
     config: config.wobbly,
   });
 
-  const [districts, setDistricts] = useState();
+  const [allDistricts, setAllDistricts] = useState();
 
   const [tableOption, setTableOption] = useState('States');
-  const [isPerMillion, setIsPerMillion] = useState(false);
+  const [isPerLakh, setIsPerLakh] = useState(false);
   const [isInfoVisible, setIsInfoVisible] = useState(false);
 
-  const lastUpdatedTT = useMemo(() => {
-    const updatedDates = [
-      states['TT']?.meta?.['last_updated'] || timelineDate,
-      states['TT']?.meta?.tested?.['last_updated'],
-    ];
-    return max(
-      updatedDates.filter((date) => date).map((date) => parseIndiaDate(date))
-    );
-  }, [states, timelineDate]);
+  const getTableStatistic = useCallback(
+    (data, statistic, type) => {
+      const statisticConfig = STATISTIC_CONFIGS[statistic];
+      if (type == 'total' && statisticConfig?.onlyDelta7) {
+        type = 'delta7';
+      }
+
+      if (statisticConfig?.showDelta && type === 'total' && delta7Mode) {
+        type = 'delta7';
+      }
+
+      return getStatistic(data, type, statistic, {
+        expiredDate: lastDataDate,
+        normalizedByPopulationPer: isPerLakh ? 'lakh' : null,
+      });
+    },
+    [isPerLakh, lastDataDate, delta7Mode]
+  );
+
+  const districts = useMemo(() => {
+    if (!isPerLakh) {
+      return allDistricts;
+    } else {
+      return Object.keys(allDistricts || {})
+        .filter(
+          (districtKey) =>
+            getStatistic(allDistricts[districtKey], 'total', 'population') > 0
+        )
+        .reduce((res, districtKey) => {
+          res[districtKey] = allDistricts[districtKey];
+          return res;
+        }, {});
+    }
+  }, [isPerLakh, allDistricts]);
+
+  const numPages = Math.ceil(
+    Object.keys(districts || {}).length / DISTRICT_TABLE_COUNT
+  );
 
   const sortingFunction = useCallback(
     (regionKeyA, regionKeyB) => {
       if (sortData.sortColumn !== 'regionName') {
         const statisticConfig = STATISTIC_CONFIGS[sortData.sortColumn];
         const dataType =
-          sortData.delta && !statisticConfig.hideDelta ? 'delta' : 'total';
+          sortData.delta && statisticConfig?.showDelta ? 'delta' : 'total';
 
         const statisticA = getTableStatistic(
           districts?.[regionKeyA] || states[regionKeyA],
           sortData.sortColumn,
-          {perMillion: isPerMillion},
-          lastUpdatedTT
-        )[dataType];
+          dataType
+        );
         const statisticB = getTableStatistic(
           districts?.[regionKeyB] || states[regionKeyB],
           sortData.sortColumn,
-          {perMillion: isPerMillion},
-          lastUpdatedTT
-        )[dataType];
+          dataType
+        );
         return sortData.isAscending
           ? statisticA - statisticB
           : statisticB - statisticA;
@@ -124,8 +176,7 @@ function Table({
     },
     [
       districts,
-      isPerMillion,
-      lastUpdatedTT,
+      getTableStatistic,
       sortData.delta,
       sortData.isAscending,
       sortData.sortColumn,
@@ -144,143 +195,200 @@ function Table({
     workerInstance.getDistricts(states);
     workerInstance.addEventListener('message', (message) => {
       if (message.data.type !== 'RPC') {
-        setDistricts(message.data);
+        setAllDistricts(message.data);
         workerInstance.terminate();
       }
     });
   }, [tableOption, states]);
 
-  const transition = useTransition(isInfoVisible, null, {
+  useEffect(() => {
+    setPage((p) => Math.max(0, Math.min(p, numPages - 1)));
+  }, [numPages]);
+
+  const handlePageClick = (direction) => {
+    if (Math.abs(direction) === 1) {
+      setPage(Math.min(Math.max(0, page + direction), numPages - 1));
+    } else if (direction < 0) {
+      setPage(0);
+    } else if (direction > 0) {
+      setPage(numPages - 1);
+    }
+  };
+
+  const transition = useTransition(isInfoVisible, {
     from: TABLE_FADE_OUT,
     enter: TABLE_FADE_IN,
     leave: TABLE_FADE_OUT,
   });
 
-  const tableStatistics = expandTable
-    ? TABLE_STATISTICS_EXPANDED
-    : TABLE_STATISTICS;
+  const tableStatistics = (
+    expandTable ? TABLE_STATISTICS_EXPANDED : TABLE_STATISTICS
+  ).filter(
+    (statistic) =>
+      (tableOption === 'States' ||
+        STATISTIC_CONFIGS[statistic]?.category !== 'tested' ||
+        !hideDistrictTestData) &&
+      (STATISTIC_CONFIGS[statistic]?.category !== 'vaccinated' ||
+        !hideVaccinated)
+  );
+
+  const showDistricts = tableOption === 'Districts' && !hideDistrictData;
+
+  useEffect(() => {
+    if (!showDistricts) {
+      setPage(0);
+    }
+  }, [showDistricts]);
+
+  useKeyPressEvent('?', () => {
+    setIsInfoVisible(!isInfoVisible);
+  });
 
   return (
-    <>
+    <div className="Table">
       <div className="table-top">
-        <animated.div
-          className={classnames('option-toggle', {
-            'is-highlighted': tableOption === 'Districts',
-          })}
-          onClick={_setTableOption}
-          style={trail[0]}
-        >
-          <OrganizationIcon size={14} />
-        </animated.div>
+        <div className="table-top-left">
+          <Tooltip message={'Toggle between states/districts'} hold>
+            <animated.div
+              className={classnames('toggle', 'option-toggle', {
+                'is-highlighted': showDistricts,
+                disabled: hideDistrictData,
+              })}
+              onClick={_setTableOption}
+              style={trail[0]}
+            >
+              <DistrictIcon />
+            </animated.div>
+          </Tooltip>
 
-        <animated.div
-          className={classnames('million-toggle', {
-            'is-highlighted': isPerMillion,
-          })}
-          onClick={setIsPerMillion.bind(this, !isPerMillion)}
-          style={trail[0]}
-        >
-          <span>10L</span>
-        </animated.div>
+          <Tooltip message={'Per lakh people'} hold>
+            <animated.div
+              className={classnames('toggle', 'lakh-toggle', {
+                'is-highlighted': isPerLakh,
+              })}
+              onClick={setIsPerLakh.bind(this, !isPerLakh)}
+              style={trail[1]}
+            >
+              <PerLakhIcon />
+            </animated.div>
+          </Tooltip>
 
-        <animated.div
-          className={classnames('info-toggle', {
-            'is-highlighted': isInfoVisible,
-          })}
-          onClick={setIsInfoVisible.bind(this, !isInfoVisible)}
-          style={trail[0]}
-        >
-          <QuestionIcon size={14} />
-        </animated.div>
+          <Tooltip message={'Last 7 day values'} hold>
+            <animated.div
+              className={classnames('toggle', 'delta-toggle', {
+                'is-highlighted': delta7Mode,
+              })}
+              style={trail[2]}
+              onClick={setDelta7Mode.bind(this, !delta7Mode)}
+            >
+              <Delta7Icon />
+            </animated.div>
+          </Tooltip>
 
-        <animated.div
-          className={classnames('expand-table-toggle', {
-            'is-highlighted': expandTable,
-          })}
-          style={trail[1]}
-          onClick={setExpandTable.bind(this, !expandTable)}
-        >
-          <FoldDownIcon size={16} />
-        </animated.div>
+          <animated.div
+            className={classnames('toggle', 'info-toggle', {
+              'is-highlighted': isInfoVisible,
+            })}
+            onClick={setIsInfoVisible.bind(this, !isInfoVisible)}
+            style={trail[3]}
+          >
+            <QuestionIcon size={14} />
+          </animated.div>
+        </div>
+
+        <Tooltip message={`${expandTable ? 'Collapse' : 'Expand'} table`} hold>
+          <animated.div
+            className={classnames('toggle', 'expand-table-toggle', {
+              'is-highlighted': expandTable,
+            })}
+            style={trail[4]}
+            onClick={setExpandTable.bind(this, !expandTable)}
+          >
+            <FoldDownIcon size={16} />
+          </animated.div>
+        </Tooltip>
       </div>
 
-      {transition.map(({item, key, props}) =>
-        item ? (
-          <animated.div key={key} className="table-helper" style={props}>
-            <div className="helper-top">
-              <div className="helper-left">
-                <div className="info-item">
-                  <span>
-                    <OrganizationIcon size={14} />
-                  </span>
-                  <p>{`Toggle between States/Districts`}</p>
-                </div>
-
-                <div className="info-item">
-                  <h5>10L</h5>
-                  <p>Per Ten Lakh People</p>
-                </div>
-
-                <div className="info-item sort">
-                  <span>
-                    <FilterIcon size={14} />
-                  </span>
-                  <p>Sort by Descending</p>
-                </div>
-
-                <div className="info-item sort invert">
-                  <span>
-                    <FilterIcon size={14} />
-                  </span>
-                  <p>Sort by Ascending</p>
-                </div>
-
-                <div className="info-item sort">
-                  <TableDeltaHelper />
-                </div>
-
-                <div className="info-item notes">
-                  <span>
-                    <InfoIcon size={15} />
-                  </span>
-                  <p>Notes</p>
-                </div>
-              </div>
-              <div className="helper-right">
-                <div className="info-item">
-                  <p>Units</p>
-                </div>
-                {Object.entries({'1K': 3, '1L': 5, '1Cr': 7}).map(
-                  ([abbr, exp]) => (
-                    <div className="info-item" key={abbr}>
-                      <h5>{abbr}</h5>
-                      <p>
-                        10
-                        <sup
-                          style={{
-                            verticalAlign: 'baseline',
-                            position: 'relative',
-                            top: '-.4em',
-                          }}
-                        >
-                          {exp}
-                        </sup>
-                      </p>
+      {transition(
+        (style, item) =>
+          item && (
+            <animated.div className="table-helper" {...{style}}>
+              <div className="helper-top">
+                <div className="helper-left">
+                  <div className="info-item">
+                    <div>
+                      <OrganizationIcon size={14} />
                     </div>
-                  )
-                )}
-              </div>
-            </div>
+                    <p>{t('Toggle between States/Districts')}</p>
+                  </div>
 
-            <h5 className="text">
-              {t('Compiled from State Govt. numbers')},{' '}
-              <Link to="/about">{t('know more')}!</Link>
-            </h5>
-          </animated.div>
-        ) : null
+                  <div className="info-item">
+                    <div>
+                      <PeopleIcon size={16} />
+                    </div>
+                    <p>{t('Per Lakh People')}</p>
+                  </div>
+
+                  <div className="info-item">
+                    <div>
+                      <PulseIcon size={16} />
+                    </div>
+                    <p>{t('Last 7 day values')}</p>
+                  </div>
+
+                  <div className="info-item sort">
+                    <div>
+                      <SortDescIcon size={14} />
+                    </div>
+                    <p>{t('Sorted by Descending')}</p>
+                  </div>
+
+                  <div className="info-item sort">
+                    <div>
+                      <SortAscIcon size={14} />
+                    </div>
+                    <p>{t('Sorted by Ascending')}</p>
+                  </div>
+
+                  <div className="info-item sort">
+                    <TableDeltaHelper />
+                  </div>
+
+                  <div className="info-item notes">
+                    <div>
+                      <InfoIcon size={15} />
+                    </div>
+                    <p>{t('Notes')}</p>
+                  </div>
+                </div>
+
+                <div className="helper-right">
+                  <div className="info-item">
+                    <p>{t('Units')}</p>
+                  </div>
+                  {Object.entries({'1K': 3, '1L': 5, '1Cr': 7}).map(
+                    ([abbr, exp]) => (
+                      <div className="info-item abbr" key={abbr}>
+                        <h5>{abbr}</h5>
+                        <p>
+                          10
+                          <sup>{exp}</sup>
+                        </p>
+                      </div>
+                    )
+                  )}
+                </div>
+              </div>
+
+              <h5 className="text">
+                {t('Compiled from State Govt. numbers')},{' '}
+                <Link to="/about">{t('know more')}!</Link>
+              </h5>
+            </animated.div>
+          )
       )}
 
-      <div className="table-container">
+      <div className="table-container" ref={tableContainerRef}>
         <div
           className="table fadeInUp"
           style={{
@@ -292,14 +400,14 @@ function Table({
               className="cell heading"
               onClick={handleSortClick.bind(this, 'regionName')}
             >
-              <div>{t(tableOption === 'States' ? 'State/UT' : 'District')}</div>
+              <div>{t(!showDistricts ? 'State/UT' : 'District')}</div>
               {sortData.sortColumn === 'regionName' && (
-                <div
-                  className={classnames('sort-icon', {
-                    invert: sortData.isAscending,
-                  })}
-                >
-                  <FilterIcon size={10} />
+                <div className={'sort-icon'}>
+                  {sortData.isAscending ? (
+                    <SortAscIcon size={12} />
+                  ) : (
+                    <SortDescIcon size={12} />
+                  )}
                 </div>
               )}
             </div>
@@ -307,18 +415,22 @@ function Table({
             {tableStatistics.map((statistic) => (
               <HeaderCell
                 key={statistic}
-                {...{statistic, sortData, setSortData}}
+                {...{
+                  statistic,
+                  sortData,
+                  setSortData,
+                }}
                 handleSort={handleSortClick.bind(this, statistic)}
               />
             ))}
           </div>
 
-          {tableOption === 'States' &&
+          {!showDistricts &&
             Object.keys(states)
               .filter(
                 (stateCode) =>
                   stateCode !== 'TT' &&
-                  !(stateCode === UNASSIGNED_STATE_CODE && isPerMillion)
+                  !(stateCode === UNASSIGNED_STATE_CODE && isPerLakh)
               )
               .sort((a, b) => sortingFunction(a, b))
               .map((stateCode) => {
@@ -326,37 +438,45 @@ function Table({
                   <Row
                     key={stateCode}
                     data={states[stateCode]}
+                    noDistrictData={noDistrictDataStates[stateCode]}
                     {...{
                       stateCode,
-                      isPerMillion,
                       regionHighlighted,
                       setRegionHighlighted,
                       expandTable,
-                      lastUpdatedTT,
+                      tableStatistics,
+                      getTableStatistic,
+                      tableWidth,
                     }}
                   />
                 );
               })}
 
-          {tableOption === 'Districts' && !districts && <TableLoader />}
+          {showDistricts && !districts && <TableLoader />}
 
-          {tableOption === 'Districts' &&
+          {showDistricts &&
             districts &&
             Object.keys(districts)
               .sort((a, b) => sortingFunction(a, b))
-              .slice(0, DISTRICT_TABLE_COUNT)
+              .slice(
+                page * DISTRICT_TABLE_COUNT,
+                (page + 1) * DISTRICT_TABLE_COUNT
+              )
               .map((districtKey) => {
+                const noDistrictData =
+                  noDistrictDataStates[districts[districtKey].stateCode];
                 return (
                   <Row
                     key={districtKey}
                     data={districts[districtKey]}
                     districtName={districts[districtKey].districtName}
                     {...{
-                      isPerMillion,
                       regionHighlighted,
                       setRegionHighlighted,
                       expandTable,
-                      lastUpdatedTT,
+                      tableStatistics,
+                      getTableStatistic,
+                      noDistrictData,
                     }}
                   />
                 );
@@ -367,16 +487,45 @@ function Table({
             data={states['TT']}
             stateCode={'TT'}
             {...{
-              isPerMillion,
               regionHighlighted,
               setRegionHighlighted,
               expandTable,
-              lastUpdatedTT,
+              tableStatistics,
+              getTableStatistic,
             }}
           />
         </div>
       </div>
-    </>
+      {showDistricts && (
+        <div className="paginate">
+          <div
+            className={classnames('left', {disabled: page === 0})}
+            onClick={handlePageClick.bind(this, -2)}
+          >
+            <ChevronsLeft size={16} />
+          </div>
+          <div
+            className={classnames('left', {disabled: page === 0})}
+            onClick={handlePageClick.bind(this, -1)}
+          >
+            <ChevronLeft size={16} />
+          </div>
+          <h5>{`${page + 1} / ${numPages}`}</h5>
+          <div
+            className={classnames('right', {disabled: page === numPages - 1})}
+            onClick={handlePageClick.bind(this, 1)}
+          >
+            <ChevronRight size={16} />
+          </div>
+          <div
+            className={classnames('right', {disabled: page === numPages - 1})}
+            onClick={handlePageClick.bind(this, 2)}
+          >
+            <ChevronsRight size={16} />
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -397,6 +546,18 @@ const isEqual = (prevProps, currProps) => {
     return false;
   } else if (!equal(prevProps.date, currProps.date)) {
     return false;
+  } else if (!equal(prevProps.hideDistrictData, currProps.hideDistrictData)) {
+    return false;
+  } else if (
+    !equal(prevProps.hideDistrictTestData, currProps.hideDistrictTestData)
+  ) {
+    return false;
+  } else if (!equal(prevProps.hideVaccinated, currProps.hideVaccinated)) {
+    return false;
+  } else if (!equal(prevProps.expandTable, currProps.expandTable)) {
+    return false;
+  } else if (!equal(prevProps.lastDataDate, currProps.lastDataDate)) {
+    return false;
   } else if (
     !equal(
       prevProps.data['TT'].total.confirmed,
@@ -404,7 +565,9 @@ const isEqual = (prevProps, currProps) => {
     )
   ) {
     return false;
-  } else if (!equal(prevProps.expandTable, currProps.expandTable)) {
+  } else if (
+    !equal(prevProps.noDistrictDataStates, currProps.noDistrictDataStates)
+  ) {
     return false;
   } else return true;
 };

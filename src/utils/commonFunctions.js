@@ -2,10 +2,8 @@ import {
   INDIA_ISO_SUFFIX,
   ISO_DATE_REGEX,
   LOCALE_SHORTHANDS,
-  NAN_STATISTICS,
-  PER_MILLION_OPTIONS,
-  STATISTIC_OPTIONS,
-  TESTED_LOOKBACK_DAYS,
+  STATISTIC_CONFIGS,
+  TESTED_EXPIRING_DAYS,
 } from '../constants';
 
 import {
@@ -61,10 +59,17 @@ export const formatLastUpdated = (unformattedDate) => {
   });
 };
 
-export const parseIndiaDate = (isoDate) => {
-  if (!isoDate) return getIndiaDate();
-  if (isoDate.match(ISO_DATE_REGEX)) isoDate += INDIA_ISO_SUFFIX;
-  return utcToZonedTime(new Date(isoDate), 'Asia/Kolkata');
+export const parseIndiaDate = (unformattedDate) => {
+  if (!unformattedDate) {
+    return getIndiaDate();
+  }
+  if (
+    typeof unformattedDate === 'string' &&
+    unformattedDate.match(ISO_DATE_REGEX)
+  ) {
+    unformattedDate += INDIA_ISO_SUFFIX;
+  }
+  return utcToZonedTime(new Date(unformattedDate), 'Asia/Kolkata');
 };
 
 export const formatDate = (unformattedDate, formatString) => {
@@ -80,31 +85,44 @@ export const formatDate = (unformattedDate, formatString) => {
   });
 };
 
+export const formatDateObjIndia = (dateObj) => {
+  return format(dateObj, "yyyy-MM-dd'T'HH:mm:ss+05:30", {
+    locale: locale,
+  });
+};
+
 export const abbreviateNumber = (number) => {
-  if (Math.abs(number) < 1e3) return numberFormatter.format(number);
-  else if (Math.abs(number) >= 1e3 && Math.abs(number) < 1e5)
+  const numberCleaned = Math.round(Math.abs(number));
+  if (numberCleaned < 1e3) return numberFormatter.format(Math.floor(number));
+  else if (numberCleaned >= 1e3 && numberCleaned < 1e5)
     return numberFormatter.format(number / 1e3) + 'K';
-  else if (Math.abs(number) >= 1e5 && Math.abs(number) < 1e7)
+  else if (numberCleaned >= 1e5 && numberCleaned < 1e7)
     return numberFormatter.format(number / 1e5) + 'L';
-  else if (Math.abs(number) >= 1e7 && Math.abs(number) < 1e10)
+  else if (numberCleaned >= 1e7 && numberCleaned < 1e10)
     return numberFormatter.format(number / 1e7) + 'Cr';
-  else if (Math.abs(number) >= 1e10 && Math.abs(number) < 1e14)
+  else if (numberCleaned >= 1e10 && numberCleaned < 1e14)
     return numberFormatter.format(number / 1e10) + 'K Cr';
-  else if (Math.abs(number) >= 1e14)
+  else if (numberCleaned >= 1e14)
     return numberFormatter.format(number / 1e14) + 'L Cr';
 };
 
-export const formatNumber = (value, option, statistic) => {
-  if (statistic && NAN_STATISTICS.includes(statistic) && value === 0)
-    value = NaN;
-
-  if (isNaN(value)) return '-';
-  else if (option === 'short') {
+export const formatNumber = (value, option = '', statistic) => {
+  if (
+    isNaN(value) ||
+    (statistic && STATISTIC_CONFIGS[statistic]?.hideZero && value === 0)
+  ) {
+    return '-';
+  } else if (option === 'long') {
+    return numberFormatter.format(
+      Math.abs(value) < 1 ? value : Math.round(value)
+    );
+  } else if (option === 'short') {
     return abbreviateNumber(value);
-  } else if (option === 'int') {
-    value = Math.floor(value);
+  } else if (option === '%') {
+    return `${numberFormatter.format(value)}%`;
+  } else if (option === '') {
+    return numberFormatter.format(value);
   }
-  return numberFormatter.format(value) + (option === '%' ? '%' : '');
 };
 
 export const capitalize = (s) => {
@@ -122,68 +140,98 @@ export const getStatistic = (
   data,
   type,
   statistic,
-  {perMillion = false, movingAverage = false} = {}
+  {
+    expiredDate = null,
+    normalizedByPopulationPer = null,
+    movingAverage = false,
+    canBeNaN = false,
+  } = {}
 ) => {
   // TODO: Replace delta with daily to remove ambiguity
   //       Or add another type for daily/delta
-  const {key, normalizeByKey: normalizeBy} = {
-    ...STATISTIC_OPTIONS[statistic],
-    ...(perMillion &&
-      !STATISTIC_OPTIONS[statistic]?.normalizeByKey &&
-      PER_MILLION_OPTIONS),
-  };
 
-  let multiplyFactor = STATISTIC_OPTIONS[statistic]?.multiplyFactor || 1;
-  multiplyFactor *=
-    (!STATISTIC_OPTIONS[statistic]?.normalizeByKey &&
-      perMillion &&
-      PER_MILLION_OPTIONS?.multiplyFactor) ||
-    1;
-
-  if (type === 'delta' && movingAverage) {
-    type = 'delta7';
-    multiplyFactor *=
-      (!STATISTIC_OPTIONS[statistic]?.normalizeByKey && 1 / 7) || 1;
+  if (expiredDate !== null) {
+    if (STATISTIC_CONFIGS[statistic]?.category === 'tested') {
+      if (
+        !data?.meta?.tested?.date ||
+        differenceInDays(
+          parseIndiaDate(expiredDate),
+          parseIndiaDate(data.meta.tested.date)
+        ) > TESTED_EXPIRING_DAYS
+      ) {
+        return 0;
+      }
+    }
   }
 
-  let count;
-  if (key === 'population') {
-    count = type === 'total' ? data?.meta?.population : 0;
-  } else if (key === 'tested') {
-    count = data?.[type]?.tested;
-  } else if (key === 'active') {
+  let multiplyFactor = 1;
+  if (type === 'delta' && movingAverage) {
+    type = 'delta7';
+    multiplyFactor *= 1 / 7;
+  }
+
+  if (normalizedByPopulationPer === 'million') {
+    multiplyFactor *= 1e6 / data?.meta?.population;
+  } else if (normalizedByPopulationPer === 'lakh') {
+    multiplyFactor *= 1e5 / data?.meta?.population;
+  } else if (normalizedByPopulationPer === 'hundred') {
+    multiplyFactor *= 1e2 / data?.meta?.population;
+  }
+
+  let val;
+  if (statistic === 'active' || statistic === 'activeRatio') {
     const confirmed = data?.[type]?.confirmed || 0;
     const deceased = data?.[type]?.deceased || 0;
     const recovered = data?.[type]?.recovered || 0;
     const other = data?.[type]?.other || 0;
-    count = confirmed - deceased - recovered - other;
+    const active = confirmed - deceased - recovered - other;
+    if (statistic === 'active') {
+      val = active;
+    } else if (statistic === 'activeRatio') {
+      val = 100 * (active / confirmed);
+    }
+  } else if (statistic === 'vaccinated') {
+    const dose1 = data?.[type]?.vaccinated1 || 0;
+    const dose2 = data?.[type]?.vaccinated2 || 0;
+    val = dose1 + dose2;
+  } else if (statistic === 'tpr') {
+    const confirmed = data?.[type]?.confirmed || 0;
+    const tested = data?.[type]?.tested || 0;
+    val = 100 * (confirmed / tested);
+  } else if (statistic === 'cfr') {
+    const deceased = data?.[type]?.deceased || 0;
+    const confirmed = data?.[type]?.confirmed || 0;
+    val = 100 * (deceased / confirmed);
+  } else if (statistic === 'recoveryRatio') {
+    const recovered = data?.[type]?.recovered || 0;
+    const confirmed = data?.[type]?.confirmed || 0;
+    val = 100 * (recovered / confirmed);
+  } else if (statistic === 'caseGrowth') {
+    const confirmedDeltaLastWeek = data?.delta7?.confirmed || 0;
+    const confirmedDeltaTwoWeeksAgo = data?.delta21_14?.confirmed || 0;
+    val =
+      type === 'total'
+        ? 100 *
+          ((confirmedDeltaLastWeek - confirmedDeltaTwoWeeksAgo) /
+            confirmedDeltaTwoWeeksAgo)
+        : 0;
+  } else if (statistic === 'population') {
+    val = type === 'total' ? data?.meta?.population : 0;
   } else {
-    count = data?.[type]?.[key];
+    val = data?.[type]?.[statistic];
   }
 
-  if (normalizeBy) {
-    count /= getStatistic(
-      data,
-      normalizeBy === 'population' ? 'total' : type,
-      normalizeBy
-    );
+  const statisticConfig = STATISTIC_CONFIGS[statistic];
+  multiplyFactor = (statisticConfig?.nonLinear && 1) || multiplyFactor;
+
+  let result = multiplyFactor * val;
+  if (!canBeNaN) {
+    result = (!isNaN(result) && result) || 0;
   }
-
-  return multiplyFactor * ((isFinite(count) && count) || 0);
-};
-
-export const getTableStatistic = (data, statistic, args, lastUpdatedTT) => {
-  const expired =
-    (STATISTIC_OPTIONS[statistic].key === 'tested' ||
-      STATISTIC_OPTIONS[statistic].normalizeByKey === 'tested') &&
-    differenceInDays(
-      lastUpdatedTT,
-      parseIndiaDate(data.meta?.tested?.['last_updated'])
-    ) > TESTED_LOOKBACK_DAYS;
-
-  const total = !expired ? getStatistic(data, 'total', statistic, args) : 0;
-  const delta = !expired ? getStatistic(data, 'delta', statistic, args) : 0;
-  return {total, delta};
+  if (!statisticConfig?.canBeInfinite) {
+    result = ((isNaN(result) || isFinite(result)) && result) || 0;
+  }
+  return result;
 };
 
 export const fetcher = (url) => {
@@ -191,3 +239,25 @@ export const fetcher = (url) => {
     return response.json();
   });
 };
+
+export function retry(fn, retriesLeft = 5, interval = 1000) {
+  return new Promise((resolve, reject) => {
+    fn()
+      .then(resolve)
+      .catch((error) => {
+        setTimeout(() => {
+          if (retriesLeft === 1) {
+            // reject('maximum retries exceeded');
+            reject(error);
+            return;
+          }
+
+          // Passing on "reject" is the important part
+          retry(fn, retriesLeft - 1, interval).then(resolve, reject);
+        }, interval);
+      });
+  });
+}
+
+export const spike = (length, width = 8) =>
+  `M${-width / 2},0L0,${-length}L${width / 2},0`;

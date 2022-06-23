@@ -1,34 +1,20 @@
 import Footer from './Footer';
 
-import {useState, useEffect} from 'react';
-import {Helmet} from 'react-helmet';
+import {API_DOMAIN} from '../constants';
+import {fetcher} from '../utils/commonFunctions';
 
-// TODO(slightlyoff): factor out common JSON parsing & caching of this file
-const DATA_URL = 'https://api.covid19india.org/website_data.json';
+import {useEffect} from 'react';
+import {Helmet} from 'react-helmet';
+import useSWR from 'swr';
 
 function About() {
-  const [faq, setFaq] = useState([]);
-
-  useEffect(() => {
-    getFAQs();
-  }, []);
+  const {data} = useSWR(`${API_DOMAIN}/website_data.json`, fetcher, {
+    suspense: true,
+  });
 
   useEffect(() => {
     window.scrollTo(0, 0);
   }, []);
-
-  const getFAQs = () => {
-    fetch(DATA_URL)
-      .then((response) => {
-        return response.json();
-      })
-      .then((data) => {
-        setFaq(data.faq);
-      })
-      .catch((error) => {
-        console.log(error);
-      });
-  };
 
   return (
     <>
@@ -41,17 +27,17 @@ function About() {
       </Helmet>
 
       <div className="About">
-        {faq.map((faq, index) => {
+        {data.faq.map((faq, index) => {
           return (
             <div
               key={index}
               className="faq fadeInUp"
               style={{animationDelay: `${0.5 + index * 0.1}s`}}
             >
-              <h2 className="question">{faq.question}</h2>
+              <h2 className="question">{faq.question.trim()}</h2>
               <h2
                 className="answer"
-                dangerouslySetInnerHTML={{__html: faq.answer}}
+                dangerouslySetInnerHTML={{__html: faq.answer.trim()}}
               ></h2>
             </div>
           );

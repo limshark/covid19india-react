@@ -1,14 +1,17 @@
 import {UPDATES_COUNT} from '../constants';
 import {capitalize} from '../utils/commonFunctions';
 
-import {formatDistance, format} from 'date-fns';
+import {CrossReferenceIcon} from '@primer/octicons-react';
+import {format, formatDistance} from 'date-fns';
 import {Fragment, useLayoutEffect} from 'react';
-import {Send} from 'react-feather';
+import {useTranslation} from 'react-i18next';
 
 const newDate = new Date();
 let currentDate = newDate;
 
 function Updates({updates}) {
+  const {t} = useTranslation();
+
   useLayoutEffect(() => {
     currentDate = newDate;
   });
@@ -23,7 +26,8 @@ function Updates({updates}) {
         .slice(-UPDATES_COUNT)
         .reverse()
         .map(function (activity, index) {
-          activity.update = activity.update.replace(/\n/g, '<br/>');
+          activity.update = activity.update.trim().replace(/\n/g, '<br/>');
+          activity.update = activity.update.replace(/\t/g, '\u2003');
           const activityDate = new Date(activity.timestamp * 1000);
           const addHeader = () => {
             currentDate = activityDate;
@@ -32,7 +36,7 @@ function Updates({updates}) {
               <>
                 {index === 0 ? (
                   <div className="update">
-                    <h4>No updates yet!</h4>
+                    <h4>{t('No updates yet!')}</h4>
                   </div>
                 ) : (
                   ''
@@ -56,7 +60,7 @@ function Updates({updates}) {
                       new Date(activity.timestamp * 1000),
                       new Date()
                     )
-                  ) + ' ago'}
+                  ) + ` ${t('ago')}`}
                 </h5>
                 <h4
                   dangerouslySetInnerHTML={{
@@ -75,8 +79,8 @@ function Updates({updates}) {
           rel="noopener noreferrer"
         >
           <h4>
-            <Send />
-            Join Instant Updates channel
+            {t('Get updates on Telegram')}
+            <CrossReferenceIcon />
           </h4>
         </a>
       </div>

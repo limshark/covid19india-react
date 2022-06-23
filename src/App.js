@@ -1,18 +1,21 @@
 import './App.scss';
 import Blog from './components/Blog';
 import Navbar from './components/Navbar';
+import {retry} from './utils/commonFunctions';
 
 import {lazy, useState, Suspense, useEffect} from 'react';
 import {Route, Redirect, Switch, useLocation} from 'react-router-dom';
-import useDarkMode from 'use-dark-mode';
 
-const Home = lazy(() => import('./components/Home'));
-const About = lazy(() => import('./components/About'));
-const State = lazy(() => import('./components/State'));
-const LanguageSwitcher = lazy(() => import('./components/LanguageSwitcher'));
+const Home = lazy(() => retry(() => import('./components/Home')));
+const Volunteers = lazy(() => retry(() => import('./components/Volunteers')));
+const About = lazy(() => retry(() => import('./components/About')));
+const State = lazy(() => retry(() => import('./components/State')));
+const LanguageSwitcher = lazy(() =>
+  retry(() => import('./components/LanguageSwitcher'))
+);
+const Banner = lazy(() => retry(() => import('./components/Banner')));
 
 const App = () => {
-  const darkMode = useDarkMode(false);
   const [showLanguageSwitcher, setShowLanguageSwitcher] = useState(false);
   const location = useLocation();
 
@@ -27,6 +30,12 @@ const App = () => {
       pageLink: '/blog',
       view: Blog,
       displayName: 'Blog',
+      showInNavbar: true,
+    },
+    {
+      pageLink: '/volunteers',
+      view: Volunteers,
+      displayName: 'Volunteers',
       showInNavbar: true,
     },
     {
@@ -60,11 +69,9 @@ const App = () => {
         />
       </Suspense>
 
-      <Navbar
-        pages={pages}
-        {...{darkMode}}
-        {...{showLanguageSwitcher, setShowLanguageSwitcher}}
-      />
+      <Navbar {...{pages, showLanguageSwitcher, setShowLanguageSwitcher}} />
+
+      <Banner />
 
       <Suspense fallback={<div />}>
         <Switch location={location}>

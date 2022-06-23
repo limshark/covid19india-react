@@ -2,16 +2,19 @@ import TimeseriesLoader from './loaders/Timeseries';
 
 import {
   STATE_NAMES,
+  STATISTIC_CONFIGS,
   TIMESERIES_CHART_TYPES,
   TIMESERIES_LOOKBACK_DAYS,
+  TIMESERIES_STATISTICS,
 } from '../constants';
 import useIsVisible from '../hooks/useIsVisible';
 import {
   getIndiaDateYesterdayISO,
   parseIndiaDate,
+  retry,
 } from '../utils/commonFunctions';
 
-import {PinIcon, ReplyIcon} from '@primer/octicons-v2-react';
+import {PinIcon, ReplyIcon} from '@primer/octicons-react';
 import classnames from 'classnames';
 import {min} from 'd3-array';
 import {formatISO, subDays} from 'date-fns';
@@ -27,10 +30,10 @@ import {
   Suspense,
 } from 'react';
 import {useTranslation} from 'react-i18next';
-import {useLocalStorage} from 'react-use';
+import {useLocalStorage, useWindowSize} from 'react-use';
 
-const Timeseries = lazy(() => import('./Timeseries'));
-const TimeseriesBrush = lazy(() => import('./TimeseriesBrush'));
+const Timeseries = lazy(() => retry(() => import('./Timeseries')));
+const TimeseriesBrush = lazy(() => retry(() => import('./TimeseriesBrush')));
 
 function TimeseriesExplorer({
   stateCode,
@@ -40,11 +43,13 @@ function TimeseriesExplorer({
   setRegionHighlighted,
   anchor,
   setAnchor,
-  expandTable,
+  expandTable = false,
+  hideVaccinated = false,
+  noRegionHighlightedDistrictData,
 }) {
   const {t} = useTranslation();
   const [lookback, setLookback] = useLocalStorage('timeseriesLookbackDays', 90);
-  const [chartType, setChartType] = useLocalStorage('chartType', 'total');
+  const [chartType, setChartType] = useLocalStorage('chartType', 'delta');
   const [isUniform, setIsUniform] = useLocalStorage('isUniform', false);
   const [isLog, setIsLog] = useLocalStorage('isLog', false);
   const [isMovingAverage, setIsMovingAverage] = useLocalStorage(
@@ -60,20 +65,21 @@ function TimeseriesExplorer({
     timelineDate || getIndiaDateYesterdayISO(),
   ]);
 
-  const [brushEnd, setBrushEnd] = useState(endDate);
+  const [brushSelectionEnd, setBrushSelectionEnd] = useState(endDate);
   useEffect(() => {
-    setBrushEnd(endDate);
+    setBrushSelectionEnd(endDate);
   }, [endDate]);
 
-  const brushStart =
+  const brushSelectionStart =
     lookback !== null
-      ? formatISO(subDays(parseIndiaDate(brushEnd), lookback), {
+      ? formatISO(subDays(parseIndiaDate(brushSelectionEnd), lookback), {
           representation: 'date',
         })
       : beginningDate;
 
   const explorerElement = useRef();
   const isVisible = useIsVisible(explorerElement, {once: true});
+  const {width} = useWindowSize();
 
   const selectedRegion = useMemo(() => {
     if (timeseries?.[regionHighlighted.stateCode]?.districts) {
@@ -163,9 +169,12 @@ function TimeseriesExplorer({
     [selectedTimeseries, endDate]
   );
 
-  const brushDates = useMemo(
-    () => dates.filter((date) => brushStart <= date && date <= brushEnd),
-    [dates, brushStart, brushEnd]
+  const brushSelectionDates = useMemo(
+    () =>
+      dates.filter(
+        (date) => brushSelectionStart <= date && date <= brushSelectionEnd
+      ),
+    [dates, brushSelectionStart, brushSelectionEnd]
   );
 
   const handleChange = useCallback(
@@ -182,6 +191,18 @@ function TimeseriesExplorer({
     });
   }, [stateCode, setRegionHighlighted]);
 
+  const statistics = useMemo(
+    () =>
+      TIMESERIES_STATISTICS.filter(
+        (statistic) =>
+          (!(STATISTIC_CONFIGS[statistic]?.category === 'vaccinated') ||
+            !hideVaccinated) &&
+          // (chartType === 'total' || statistic !== 'active') &&
+          (chartType === 'delta' || statistic !== 'tpr')
+      ),
+    [chartType, hideVaccinated]
+  );
+
   return (
     <div
       className={classnames(
@@ -191,14 +212,22 @@ function TimeseriesExplorer({
         },
         {expanded: expandTable}
       )}
-      style={{display: anchor === 'mapexplorer' ? 'none' : ''}}
+      style={{
+        display:
+          anchor && anchor !== 'timeseries' && (!expandTable || width < 769)
+            ? 'none'
+            : '',
+      }}
       ref={explorerElement}
     >
       <div className="timeseries-header">
         <div
-          className={classnames('anchor', {
+          className={classnames('anchor', 'fadeInUp', {
             stickied: anchor === 'timeseries',
           })}
+          style={{
+            display: expandTable && width >= 769 ? 'none' : '',
+          }}
           onClick={
             setAnchor &&
             setAnchor.bind(this, anchor === 'timeseries' ? null : 'timeseries')
@@ -308,19 +337,31 @@ function TimeseriesExplorer({
           <Timeseries
             timeseries={selectedTimeseries}
             regionHighlighted={selectedRegion}
-            dates={brushDates}
-            {...{endDate, chartType, isUniform, isLog, isMovingAverage}}
+            dates={brushSelectionDates}
+            {...{
+              statistics,
+              endDate,
+              chartType,
+              isUniform,
+              isLog,
+              isMovingAverage,
+              noRegionHighlightedDistrictData,
+            }}
           />
           <TimeseriesBrush
             timeseries={selectedTimeseries}
             regionHighlighted={selectedRegion}
-            brushDomain={[brushStart, brushEnd]}
-            {...{dates, endDate, setBrushEnd, setLookback}}
+            currentBrushSelection={[brushSelectionStart, brushSelectionEnd]}
+            animationIndex={statistics.length}
+            {...{dates, endDate, lookback, setBrushSelectionEnd, setLookback}}
           />
         </Suspense>
       )}
       {!isVisible && <div style={{height: '50rem'}} />}
-      <div className="pills">
+      <div
+        className="pills fadeInUp"
+        style={{animationDelay: `${(1 + statistics.length) * 250}ms`}}
+      >
         {TIMESERIES_LOOKBACK_DAYS.map((numDays) => (
           <button
             key={numDays}
@@ -330,7 +371,7 @@ function TimeseriesExplorer({
             })}
             onClick={setLookback.bind(this, numDays)}
           >
-            {t(numDays !== null ? `${numDays} days` : 'Beginning')}
+            {numDays !== null ? `${numDays} ${t('days')}` : t('Beginning')}
           </button>
         ))}
       </div>
@@ -364,6 +405,15 @@ const isEqual = (prevProps, currProps) => {
   } else if (!equal(currProps.anchor, prevProps.anchor)) {
     return false;
   } else if (!equal(currProps.expandTable, prevProps.expandTable)) {
+    return false;
+  } else if (!equal(currProps.hideVaccinated, prevProps.hideVaccinated)) {
+    return false;
+  } else if (
+    !equal(
+      currProps.noRegionHighlightedDistrictData,
+      prevProps.noRegionHighlightedDistrictData
+    )
+  ) {
     return false;
   }
   return true;
